@@ -33,6 +33,7 @@ Full docs are available at **[crowdstrike.github.io/falcon-mcp](https://crowdstr
 | [Intel](https://crowdstrike.github.io/falcon-mcp/modules/intel/) | Research threat actors, IOCs, and intelligence reports |
 | [IOC](https://crowdstrike.github.io/falcon-mcp/modules/ioc/) | Search, create, and remove custom indicators of compromise |
 | [NGSIEM](https://crowdstrike.github.io/falcon-mcp/modules/ngsiem/) | Execute CQL queries against Next-Gen SIEM |
+| [ODS](https://crowdstrike.github.io/falcon-mcp/modules/ods/) | Hunt scan results, launch scans, manage schedules, and review malicious files found by ODS |
 | [Quarantine](https://crowdstrike.github.io/falcon-mcp/modules/quarantine/) | Search quarantine records, preview action counts, and release, unrelease, or delete quarantined files |
 | [Real Time Response](https://crowdstrike.github.io/falcon-mcp/modules/rtr/) | Initialize RTR sessions and execute read-only triage commands |
 | [Scheduled Reports](https://crowdstrike.github.io/falcon-mcp/modules/scheduled-reports/) | Manage scheduled reports and download report files |
