@@ -102,6 +102,15 @@ API_SCOPE_REQUIREMENTS = {
     "ExtractionListV1": ["Sample uploads:read"],
     "ExtractionGetV1": ["Sample uploads:read"],
     "ExtractionCreateV1": ["Sample uploads:write"],
+    # Sandbox operations
+    "UploadSampleV2": ["Sandbox (Falcon Intelligence):write"],
+    "QuerySampleV1": ["Sandbox (Falcon Intelligence):read"],
+    "Submit": ["Sandbox (Falcon Intelligence):write"],
+    "QuerySubmissions": ["Sandbox (Falcon Intelligence):read"],
+    "GetSubmissions": ["Sandbox (Falcon Intelligence):read"],
+    "QueryReports": ["Sandbox (Falcon Intelligence):read"],
+    "GetSummaryReports": ["Sandbox (Falcon Intelligence):read"],
+    "GetReports": ["Sandbox (Falcon Intelligence):read"],
     # Custom IOA operations
     "query_rule_groups_full": ["Custom IOA Rules:read"],
     "query_platformsMixin0": ["Custom IOA Rules:read"],
