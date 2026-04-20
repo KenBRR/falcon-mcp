@@ -92,6 +92,16 @@ API_SCOPE_REQUIREMENTS = {
     "ActionUpdateCount": ["Quarantined Files:read"],
     "UpdateQuarantinedDetectsByIds": ["Quarantined Files:write"],
     "UpdateQfByQuery": ["Quarantined Files:write"],
+    # Sample uploads operations
+    "UploadSampleV3": ["Sample uploads:write"],
+    "DeleteSampleV3": ["Sample uploads:write"],
+    "ArchiveListV1": ["Sample uploads:read"],
+    "ArchiveGetV1": ["Sample uploads:read"],
+    "ArchiveUploadV2": ["Sample uploads:write"],
+    "ArchiveDeleteV1": ["Sample uploads:write"],
+    "ExtractionListV1": ["Sample uploads:read"],
+    "ExtractionGetV1": ["Sample uploads:read"],
+    "ExtractionCreateV1": ["Sample uploads:write"],
     # Custom IOA operations
     "query_rule_groups_full": ["Custom IOA Rules:read"],
     "query_platformsMixin0": ["Custom IOA Rules:read"],
