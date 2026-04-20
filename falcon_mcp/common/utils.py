@@ -7,10 +7,19 @@ This module provides common utility functions for the Falcon MCP server.
 import re
 from typing import Any, Optional
 
+from pydantic.fields import FieldInfo
+
 from .errors import _format_error_response, is_success_response
 from .logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def normalize_field_value(value: Any) -> Any:
+    """Unwrap direct-call Pydantic Field defaults into plain Python values."""
+    if isinstance(value, FieldInfo):
+        return None if value.is_required() else value.default
+    return value
 
 
 def filter_none_values(data: dict[str, Any]) -> dict[str, Any]:
@@ -22,7 +31,12 @@ def filter_none_values(data: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Dict[str, Any]: Filtered dictionary
     """
-    return {k: v for k, v in data.items() if v is not None}
+    filtered: dict[str, Any] = {}
+    for key, value in data.items():
+        normalized = normalize_field_value(value)
+        if normalized is not None:
+            filtered[key] = normalized
+    return filtered
 
 
 def prepare_api_parameters(params: dict[str, Any]) -> dict[str, Any]:
