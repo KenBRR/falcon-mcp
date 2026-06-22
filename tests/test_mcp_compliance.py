@@ -35,6 +35,11 @@ MUTATING_TOOL_ALLOWLIST: set[str] = {
     # firewall module
     "falcon_create_firewall_rule_group",
     "falcon_delete_firewall_rule_groups",
+    # host_groups module
+    "falcon_create_host_group",
+    "falcon_update_host_group",
+    "falcon_delete_host_groups",
+    "falcon_perform_host_group_action",
     # custom_ioa module
     "falcon_create_ioa_rule_group",
     "falcon_update_ioa_rule_group",
@@ -71,6 +76,18 @@ MUTATING_TOOL_ALLOWLIST: set[str] = {
     # quarantine module
     "falcon_update_quarantined_files",
     "falcon_delete_quarantined_files",
+    # exclusions module
+    "falcon_create_exclusion",
+    "falcon_update_exclusion",
+    "falcon_delete_exclusions",
+    # policies module
+    "falcon_create_policy",
+    "falcon_update_policy",
+    "falcon_delete_policies",
+    "falcon_perform_policy_action",
+    "falcon_set_policy_precedence",
+    # detections module
+    "falcon_update_detections",
 }
 
 RESOURCE_URI_PATTERN = re.compile(r"^falcon://[a-z0-9-]+(/[a-z0-9-]+)+/[a-z]+-guide$")
@@ -442,6 +459,52 @@ class TestMCPComplianceProtocol(unittest.IsolatedAsyncioTestCase):
             "only after security review confirms the tool mutates tenant state):\n"
             + "\n".join(f"  - {name}: {reason}" for name, reason in violations),
         )
+
+
+class TestMCPComplianceDynamic(unittest.IsolatedAsyncioTestCase):
+    """Annotation compliance tests for the dynamic-mode tool surface."""
+
+    def setUp(self):
+        patcher = patch("falcon_mcp.server.FalconClient")
+        self.mock_client_cls = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        mock_client = MagicMock()
+        mock_client.authenticate.return_value = True
+        mock_client.is_authenticated.return_value = True
+        self.mock_client_cls.return_value = mock_client
+
+        self.mcp_server = FalconMCPServer(enabled_modules={"detections"}, dynamic=True)
+
+    async def test_dynamic_mode_exposes_three_tools(self):
+        """Dynamic mode MUST expose exactly 3 tools."""
+        async with create_connected_server_and_client_session(
+            self.mcp_server.server
+        ) as session:
+            tools = (await session.list_tools()).tools
+
+        tool_names = {t.name for t in tools}
+        self.assertEqual(
+            tool_names,
+            {"falcon_list_enabled_modules", "falcon_search_tools", "falcon_execute_tool"},
+        )
+
+    async def test_dynamic_meta_tool_annotations(self):
+        """falcon_search_tools MUST be read-only; falcon_execute_tool intentionally has no annotations."""
+        async with create_connected_server_and_client_session(
+            self.mcp_server.server
+        ) as session:
+            tools = {t.name: t for t in (await session.list_tools()).tools}
+
+        search_annotations = tools["falcon_search_tools"].annotations
+        self.assertIsNotNone(search_annotations)
+        self.assertTrue(search_annotations.readOnlyHint)
+        self.assertFalse(search_annotations.destructiveHint)
+
+        # falcon_execute_tool is a general dispatcher that can invoke mutating tools.
+        # annotations=None is intentional — MCP spec defaults to non-read-only/destructive,
+        # which is the correct conservative posture for a meta-dispatcher.
+        self.assertIsNone(tools["falcon_execute_tool"].annotations)
 
 
 if __name__ == "__main__":

@@ -88,6 +88,20 @@ class RTRAdminModule(BaseModule):
 
     MODULE_NAME = "rtr_admin"
 
+    def _format_empty_rtr_admin_search_response(
+        self,
+        filter_used: str | None,
+        fql_documentation: str,
+    ) -> dict[str, Any]:
+        """Format an accepted RTR Admin search that returned no matching records."""
+        return {
+            "results": [],
+            "total": 0,
+            "filter_used": filter_used,
+            "fql_guide": fql_documentation,
+            "hint": "No results matched the supplied filter. Review the FQL guide above if this was unexpected.",
+        }
+
     def register_tools(self, server: FastMCP) -> None:
         """Register tools with the MCP server."""
         self._add_tool(
@@ -438,8 +452,8 @@ class RTRAdminModule(BaseModule):
             )
 
         if not ids:
-            return self._format_fql_error_response(
-                [], filter, SEARCH_RTR_ADMIN_SCRIPTS_FQL_DOCUMENTATION
+            return self._format_empty_rtr_admin_search_response(
+                filter, SEARCH_RTR_ADMIN_SCRIPTS_FQL_DOCUMENTATION
             )
 
         details = self._base_get_by_ids(
@@ -504,8 +518,8 @@ class RTRAdminModule(BaseModule):
             )
 
         if not ids:
-            return self._format_fql_error_response(
-                [], filter, SEARCH_RTR_FALCON_SCRIPTS_FQL_DOCUMENTATION
+            return self._format_empty_rtr_admin_search_response(
+                filter, SEARCH_RTR_FALCON_SCRIPTS_FQL_DOCUMENTATION
             )
 
         details = self._base_get_by_ids(
@@ -569,8 +583,8 @@ class RTRAdminModule(BaseModule):
             )
 
         if not ids:
-            return self._format_fql_error_response(
-                [], filter, SEARCH_RTR_PUT_FILES_FQL_DOCUMENTATION
+            return self._format_empty_rtr_admin_search_response(
+                filter, SEARCH_RTR_PUT_FILES_FQL_DOCUMENTATION
             )
 
         details = self._base_get_by_ids(

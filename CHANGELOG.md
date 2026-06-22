@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.12.0](https://github.com/CrowdStrike/falcon-mcp/compare/v0.11.0...v0.12.0) (2026-06-11)
+
+
+### Features
+
+* **modules/detections:** add update_detections tool ([#439](https://github.com/CrowdStrike/falcon-mcp/issues/439)) ([477c47e](https://github.com/CrowdStrike/falcon-mcp/commit/477c47e4c88d6002642fc9e718a4238939d12322))
+* **modules/exclusions:** add unified Exclusions module ([#437](https://github.com/CrowdStrike/falcon-mcp/issues/437)) ([b9b7ea6](https://github.com/CrowdStrike/falcon-mcp/commit/b9b7ea611f7f18be4c2e5e8e29db1578a7d2c84d))
+* **modules/host-groups:** add Host Groups module ([#431](https://github.com/CrowdStrike/falcon-mcp/issues/431)) ([5b6e2af](https://github.com/CrowdStrike/falcon-mcp/commit/5b6e2afdfc5dddd032130870e84bce41e23ba234))
+* **modules/policies:** add unified Policies module ([#438](https://github.com/CrowdStrike/falcon-mcp/issues/438)) ([7975fa3](https://github.com/CrowdStrike/falcon-mcp/commit/7975fa36e6ab561a49e67bbe64996fbf907d8119))
+
+## [0.11.0](https://github.com/CrowdStrike/falcon-mcp/compare/v0.10.0...v0.11.0) (2026-06-03)
+
+
+### Features
+
+* **client:** add proxy configuration for outbound Falcon API connections ([#408](https://github.com/CrowdStrike/falcon-mcp/issues/408)) ([5ebafe1](https://github.com/CrowdStrike/falcon-mcp/commit/5ebafe1ed417acfd31684929800f23cbd57608af)), closes [#405](https://github.com/CrowdStrike/falcon-mcp/issues/405)
+* **modules/correlation-rules:** add NG-SIEM Correlation Rules module ([#391](https://github.com/CrowdStrike/falcon-mcp/issues/391)) ([afd0a88](https://github.com/CrowdStrike/falcon-mcp/commit/afd0a885238dd75823066aeb4fd6dc82f501d218))
+* **modules/data-protection:** add Data Protection module ([#428](https://github.com/CrowdStrike/falcon-mcp/issues/428)) ([fff356c](https://github.com/CrowdStrike/falcon-mcp/commit/fff356ca32558be20cdd36488f718aaf1eb65262))
+* **modules/quarantine:** add quarantine workflows ([#352](https://github.com/CrowdStrike/falcon-mcp/issues/352)) ([0e66344](https://github.com/CrowdStrike/falcon-mcp/commit/0e66344356eca035b2fb2e53a2a5e6f3eab5c6b5))
+* **modules/rtr:** add audit and command wait workflows ([#356](https://github.com/CrowdStrike/falcon-mcp/issues/356)) ([14b1007](https://github.com/CrowdStrike/falcon-mcp/commit/14b1007acfa655a01b05ee1a5fc6a78cc56531ba))
+
+
+### Bug Fixes
+
+* **docker:** use multi-stage COPY pattern for uv binary ([#411](https://github.com/CrowdStrike/falcon-mcp/issues/411)) ([a1f0628](https://github.com/CrowdStrike/falcon-mcp/commit/a1f062873ec0e8906ee665a7035e921b8ed05142))
+* **modules/cloud:** return int count from count_kubernetes_containers ([#397](https://github.com/CrowdStrike/falcon-mcp/issues/397)) ([42d1172](https://github.com/CrowdStrike/falcon-mcp/commit/42d1172aea7ddbebbe8c9ba86dd106c3e8c58cf7))
+* **modules/correlation-rules:** align API fields with live behavior ([#407](https://github.com/CrowdStrike/falcon-mcp/issues/407)) ([0199222](https://github.com/CrowdStrike/falcon-mcp/commit/019922262303dfd43398879ea82e7e5ee9620455))
+* **modules/idp:** resolve FieldInfo defaults before building search_criteria ([#396](https://github.com/CrowdStrike/falcon-mcp/issues/396)) ([47205d1](https://github.com/CrowdStrike/falcon-mcp/commit/47205d12b6d74227139bf99c4e935e4e0b60dffa))
+* **modules/intel:** parse JSON format in get_mitre_report ([#429](https://github.com/CrowdStrike/falcon-mcp/issues/429)) ([62e698c](https://github.com/CrowdStrike/falcon-mcp/commit/62e698ccbff38f384a6cd76b3a93dfa2dc648da9)), closes [#383](https://github.com/CrowdStrike/falcon-mcp/issues/383)
+
 ## [0.10.0](https://github.com/CrowdStrike/falcon-mcp/compare/v0.9.0...v0.10.0) (2026-05-18)
 
 

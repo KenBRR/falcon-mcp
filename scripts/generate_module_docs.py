@@ -1,7 +1,7 @@
 """Generate Starlight documentation pages from falcon_mcp module source code.
 
 Introspects module classes, tool methods, and resource definitions to produce
-markdown files for docs-site/src/content/docs/modules/.
+markdown files for docs/modules/.
 
 Usage:
     uv run python scripts/generate_module_docs.py
@@ -23,7 +23,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from falcon_mcp.common.api_scopes import API_SCOPE_REQUIREMENTS  # noqa: E402
 
-OUTPUT_DIR = PROJECT_ROOT / "docs-site" / "src" / "content" / "docs" / "modules"
+OUTPUT_DIR = PROJECT_ROOT / "docs" / "modules"
+SITE_BASE_PATH = "/falcon-mcp"
 
 # Module display metadata — overrides only.
 # Titles and descriptions are auto-derived from module docstrings.
@@ -41,6 +42,9 @@ MODULE_METADATA: dict[str, dict[str, Any]] = {
     },
     "dataprotection": {
         "slug": "data-protection",
+    },
+    "hostgroups": {
+        "slug": "host-groups",
     },
     "idp": {
         "title": "Identity Protection",
@@ -190,6 +194,11 @@ TOOL_EXAMPLES: dict[str, list[str]] = {
     "falcon_get_detection_details": [
         "Get me the details for this detection",
     ],
+    "falcon_update_detections": [
+        "Mark detection abc123 as in_progress",
+        "Assign detection abc123 to analyst@example.com",
+        "Close these detections and add a comment: resolved via playbook",
+    ],
     # Discover
     "falcon_search_applications": [
         "Find all Chrome installations across my environment",
@@ -222,6 +231,30 @@ TOOL_EXAMPLES: dict[str, list[str]] = {
     "falcon_get_host_details": [
         "Get the full details for host device abc123",
     ],
+    # Host Groups
+    "falcon_search_host_groups": [
+        "Show me all static host groups",
+        "Find host groups created in the last 30 days",
+    ],
+    "falcon_search_host_group_members": [
+        "List the Windows hosts in host group abc123",
+        "Show me the members of the Production Servers group",
+    ],
+    "falcon_create_host_group": [
+        "Create a static host group called 'Critical Servers'",
+        "Create a dynamic host group for all Windows hosts",
+    ],
+    "falcon_update_host_group": [
+        "Rename host group abc123 to 'Decommissioned'",
+        "Update the assignment rule for the dynamic Windows group",
+    ],
+    "falcon_delete_host_groups": [
+        "Delete host group abc123",
+    ],
+    "falcon_perform_host_group_action": [
+        "Add the hosts matching platform_name Windows to group abc123",
+        "Remove host device xyz from host group abc123",
+    ],
     # Identity Protection
     "falcon_idp_investigate_entity": [
         "Investigate user john.doe@company.com and show their risk assessment",
@@ -241,6 +274,24 @@ TOOL_EXAMPLES: dict[str, list[str]] = {
     "falcon_get_mitre_report": [
         "Generate MITRE ATT&CK report for FANCY BEAR",
     ],
+    # Exclusions
+    "falcon_search_exclusions": [
+        "Show me my most recent IOA and machine learning exclusions",
+        "List sensor visibility exclusions created in the last 7 days",
+    ],
+    "falcon_create_exclusion": [
+        "Create an ML exclusion for /tmp/foo.sh applied to all hosts",
+        "Add a sensor visibility exclusion for C:\\Temp\\* on the Workstations group",
+    ],
+    "falcon_update_exclusion": [
+        "Update IOA exclusion abc123 to also match a new command line regex",
+    ],
+    "falcon_delete_exclusions": [
+        "Delete the certificate exclusion with ID abc123",
+    ],
+    "falcon_get_certificate_details": [
+        "Look up the signing certificate for SHA256 3dd9a...",
+    ],
     # IOC
     "falcon_search_iocs": [
         "Find all active domain IOCs",
@@ -258,6 +309,31 @@ TOOL_EXAMPLES: dict[str, list[str]] = {
     "falcon_search_ngsiem": [
         "Run this CQL query for the last 24 hours: #event_simpleName=ProcessRollup2",
         "Search NGSIEM for DNS events from January 2025",
+    ],
+    # Policies
+    "falcon_search_policies": [
+        "List all firewall policies",
+        "Show enabled sensor update policies for Windows",
+        "Find prevention policies whose name contains 'default'",
+    ],
+    "falcon_search_policy_members": [
+        "What hosts are assigned to firewall policy 1a2b3c?",
+    ],
+    "falcon_create_policy": [
+        "Create a disabled firewall policy named 'Test FW' for Windows",
+    ],
+    "falcon_update_policy": [
+        "Rename prevention policy 1a2b3c to 'Servers - Strict'",
+    ],
+    "falcon_delete_policies": [
+        "Delete firewall policy 1a2b3c",
+    ],
+    "falcon_perform_policy_action": [
+        "Disable prevention policy 1a2b3c",
+        "Add host group 9z8y7x to sensor update policy 1a2b3c",
+    ],
+    "falcon_set_policy_precedence": [
+        "Set the precedence order of these Windows prevention policies: 1a2b3c, 4d5e6f, 7g8h9i",
     ],
     # Quarantine
     "falcon_search_quarantined_files": [
@@ -778,12 +854,11 @@ def generate_module_page(
 
     # Build markdown
     lines = []
-    lines.append("---")
-    lines.append(f"title: {title}")
-    lines.append(f"description: {description}")
-    lines.append("sidebar:")
-    lines.append(f"  order: {sidebar_order}")
-    lines.append("---")
+    lines.append(f"<!-- meta:title {title} -->")
+    lines.append(f"<!-- meta:description {description} -->")
+    lines.append("<!-- meta:section modules -->")
+    lines.append("<!-- meta:link-base /falcon-mcp/ -->")
+    lines.append(f"<!-- frontmatter:sidebar order:{sidebar_order} -->")
     lines.append("")
     lines.append(description)
     lines.append("")
@@ -809,14 +884,12 @@ def generate_module_page(
 
             # Admonition for mutating/destructive tools
             if destructive:
-                lines.append(":::caution")
-                lines.append("This tool performs destructive operations.")
-                lines.append(":::")
+                lines.append("> [!CAUTION]")
+                lines.append("> This tool performs destructive operations.")
                 lines.append("")
             elif not read_only:
-                lines.append(":::note")
-                lines.append("This tool modifies data.")
-                lines.append(":::")
+                lines.append("> [!NOTE]")
+                lines.append("> This tool modifies data.")
                 lines.append("")
 
             # Per-tool scopes
@@ -868,12 +941,13 @@ def generate_module_page(
 def generate_overview_page(modules: dict[str, dict[str, Any]]) -> str:
     """Generate the modules overview page with summary table."""
     lines = []
-    lines.append("---")
-    lines.append("title: Module Overview")
-    lines.append("description: Overview of all available Falcon MCP modules with API scopes.")
-    lines.append("sidebar:")
-    lines.append("  order: 0")
-    lines.append("---")
+    lines.append("<!-- meta:title Module Overview -->")
+    lines.append(
+        "<!-- meta:description Overview of all available Falcon MCP modules with API scopes. -->"
+    )
+    lines.append("<!-- meta:section modules -->")
+    lines.append("<!-- meta:link-base /falcon-mcp/ -->")
+    lines.append("<!-- frontmatter:sidebar order:0 -->")
     lines.append("")
     lines.append(
         "The Falcon MCP Server provides the following modules. Each module requires specific CrowdStrike API scopes."
@@ -891,7 +965,7 @@ def generate_overview_page(modules: dict[str, dict[str, Any]]) -> str:
         scopes = ", ".join(f"`{s}`" for s in scopes_list)
         fallback_desc = modules[key]["auto_description"] or f"{title} module for CrowdStrike Falcon."
         desc = meta.get("description", fallback_desc)
-        lines.append(f"| [{title}](/falcon-mcp/modules/{slug}/) | {scopes} | {desc} |")
+        lines.append(f"| [{title}]({SITE_BASE_PATH}/modules/{slug}/) | {scopes} | {desc} |")
 
     lines.append("")
     return "\n".join(lines)
