@@ -216,3 +216,6 @@ docs-site/.astro/
 
 # Playwright MCP screenshots
 .playwright-mcp/
+
+# Local integration worktrees
+.worktrees/
