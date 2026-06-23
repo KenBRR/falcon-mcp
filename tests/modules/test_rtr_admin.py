@@ -30,11 +30,12 @@ class TestRTRAdminModule(TestModules):
             "falcon_check_rtr_admin_command_status",
             "falcon_classify_rtr_admin_command",
             "falcon_preview_rtr_admin_command",
+            "falcon_preview_rtr_admin_batch_command",
             "falcon_execute_rtr_admin_command",
+            "falcon_execute_rtr_admin_batch_command",
             "falcon_run_rtr_admin_command_and_wait",
         ]
         self.assert_tools_registered(expected_tools)
-        self.assertFalse(hasattr(self.module, "batch_execute_admin_command"))
 
     def test_tool_annotations(self):
         """Test tool annotations are correctly set."""
@@ -48,11 +49,21 @@ class TestRTRAdminModule(TestModules):
             "falcon_check_rtr_admin_command_status",
             "falcon_classify_rtr_admin_command",
             "falcon_preview_rtr_admin_command",
+            "falcon_preview_rtr_admin_batch_command",
         ]:
             self.assert_tool_annotations(tool_name, READ_ONLY_ANNOTATIONS)
 
         self.assert_tool_annotations(
             "falcon_execute_rtr_admin_command",
+            ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
+        )
+        self.assert_tool_annotations(
+            "falcon_execute_rtr_admin_batch_command",
             ToolAnnotations(
                 readOnlyHint=False,
                 destructiveHint=True,
@@ -201,6 +212,7 @@ class TestRTRAdminModule(TestModules):
             "RTR_GetPutFileContents",
             "RTR_CheckAdminCommandStatus",
             "RTR_ExecuteAdminCommand",
+            "BatchAdminCmd",
         ]:
             self.assertEqual(
                 get_required_scopes(operation),
@@ -664,6 +676,17 @@ class TestRTRAdminModule(TestModules):
         self.assertIn("error", result)
         self.mock_client.command.assert_not_called()
 
+    def test_classify_rejects_multi_token_base_command(self):
+        """Test base_command cannot carry hidden command arguments."""
+        result = self.module.classify_rtr_admin_command(
+            base_command="ps && rm",
+            command_string="ps",
+        )
+
+        self.assertIn("error", result)
+        self.assertIn("single RTR Admin command token", result["error"])
+        self.mock_client.command.assert_not_called()
+
     def test_classify_rejects_base_command_mismatch(self):
         """Test command strings cannot hide a different base command."""
         result = self.module.classify_rtr_admin_command(
@@ -674,6 +697,46 @@ class TestRTRAdminModule(TestModules):
         self.assertIn("error", result)
         self.assertEqual(result["details"]["base_command"], "ps")
         self.assertEqual(result["details"]["command_string_base"], "rm")
+        self.mock_client.command.assert_not_called()
+
+    def test_classify_calls_out_shell_control_separators_for_approval(self):
+        """Test direct compound command shapes require explicit approval review."""
+        result = self.module.classify_rtr_admin_command(
+            base_command="ps",
+            command_string=r"ps && rm C:\Temp\old.bin",
+        )
+
+        self.assertEqual(result["category"], "high_impact")
+        self.assertEqual(result["risk"], "critical")
+        self.assertFalse(result["allowed_for_execution"])
+        self.assertTrue(result["requires_approval"])
+        self.assertTrue(result["can_execute_with_approval"])
+        self.assertIn("shell/control", result["blocked_reason"])
+        self.assertIn("shell/control", result["command_warnings"][0])
+        self.mock_client.command.assert_not_called()
+
+    def test_classify_allows_shell_control_inside_runscript_approval_gate(self):
+        """Test runscript carries shell logic only through high-impact approval."""
+        result = self.module.classify_rtr_admin_command(
+            base_command="runscript",
+            command_string="runscript -Raw=```cmd /c whoami && hostname```",
+        )
+
+        self.assertEqual(result["category"], "script_execution")
+        self.assertFalse(result["allowed_for_execution"])
+        self.assertTrue(result["requires_approval"])
+        self.assertTrue(result["can_execute_with_approval"])
+        self.mock_client.command.assert_not_called()
+
+    def test_classify_malformed_command_string_returns_error(self):
+        """Test malformed command strings stop before policy or Falcon calls."""
+        result = self.module.classify_rtr_admin_command(
+            base_command="ps",
+            command_string='ps "unterminated',
+        )
+
+        self.assertIn("error", result)
+        self.assertIn("could not be parsed", result["error"])
         self.mock_client.command.assert_not_called()
 
     def test_preview_admin_command_does_not_call_falcon(self):
@@ -772,6 +835,42 @@ class TestRTRAdminModule(TestModules):
             first["approval_gate"]["approval_phrase"],
             second["approval_gate"]["approval_phrase"],
         )
+
+    def test_approval_hash_survives_session_refresh(self):
+        """Test high-impact approvals bind to device and command, not stale session IDs."""
+        preview = self.module.preview_rtr_admin_command(
+            session_id="old-session",
+            device_id="aid-1",
+            base_command="rm",
+            command_string=r"rm C:\Temp\old.bin",
+            target_hostname="HOST-1",
+            reason="cleanup test file",
+            ticket="INC-123",
+            expected_effect="remove selected file",
+            persist=True,
+        )
+        approval_phrase = preview["approval_gate"]["approval_phrase"]
+        self.mock_client.command.return_value = {
+            "status_code": 200,
+            "body": {"resources": [{"cloud_request_id": "req-123"}]},
+        }
+
+        result = self.module.execute_rtr_admin_command(
+            session_id="new-session",
+            device_id="aid-1",
+            base_command="rm",
+            command_string=r"rm C:\Temp\old.bin",
+            target_hostname="HOST-1",
+            reason="cleanup test file",
+            ticket="INC-123",
+            expected_effect="remove selected file",
+            persist=True,
+            operator_approval=approval_phrase,
+        )
+
+        self.assertTrue(result["submitted"])
+        self.assertTrue(result["approval_gate"]["approved"])
+        self.mock_client.command.assert_called_once()
 
     def test_approval_hash_independent_of_hostname(self):
         """Test that hostname differences do not break approval phrase matching."""
@@ -995,6 +1094,65 @@ class TestRTRAdminModule(TestModules):
         self.assertIn("persist_warning", result)
         self.mock_client.command.assert_called_once()
 
+    def test_execute_admin_batch_command_submits_high_impact_after_exact_approval(self):
+        """Test high-impact batch execution submits only after exact approval."""
+        preview = self.module.preview_rtr_admin_batch_command(
+            batch_id="batch-1",
+            base_command="runscript",
+            command_string="runscript -CloudFile=\"FixThing\"",
+            optional_hosts=["aid-1", "aid-2"],
+            target_summary="two reviewed accounting workstations",
+            reason="repair approved application state",
+            ticket="INC-123",
+            expected_effect="run the approved repair script",
+            persist_all=True,
+            timeout=30,
+            timeout_duration="30s",
+            host_timeout_duration="20s",
+        )
+        approval_phrase = preview["approval_gate"]["approval_phrase"]
+        self.mock_client.command.return_value = {
+            "status_code": 200,
+            "body": {"resources": [{"batch_id": "batch-1", "cloud_request_id": "req-1"}]},
+        }
+
+        result = self.module.execute_rtr_admin_batch_command(
+            batch_id="batch-1",
+            base_command="runscript",
+            command_string="runscript -CloudFile=\"FixThing\"",
+            optional_hosts=["aid-1", "aid-2"],
+            target_summary="two reviewed accounting workstations",
+            reason="repair approved application state",
+            ticket="INC-123",
+            expected_effect="run the approved repair script",
+            operator_approval=approval_phrase,
+            persist_all=True,
+            timeout=30,
+            timeout_duration="30s",
+            host_timeout_duration="20s",
+        )
+
+        self.mock_client.command.assert_called_once_with(
+            "BatchAdminCmd",
+            parameters={
+                "timeout": 30,
+                "timeout_duration": "30s",
+                "host_timeout_duration": "20s",
+            },
+            body={
+                "base_command": "runscript",
+                "batch_id": "batch-1",
+                "command_string": "runscript -CloudFile=\"FixThing\"",
+                "optional_hosts": ["aid-1", "aid-2"],
+                "persist_all": True,
+            },
+        )
+        self.assertTrue(result["submitted"])
+        self.assertEqual(result["operation"], "BatchAdminCmd")
+        self.assertTrue(result["approval_gate"]["approved"])
+        self.assertIn("persist_warning", result)
+        self.assertIn("per-host cloud_request_id", result["next_step"])
+
     def test_execute_admin_command_returns_runscript_raw_guidance(self):
         """Test raw runscript execution includes controller guidance."""
         self.mock_client.command.return_value = {
@@ -1024,6 +1182,54 @@ class TestRTRAdminModule(TestModules):
             ],
             "runscript -Raw=```<target-side script>```",
         )
+
+    def test_preview_admin_batch_command_does_not_call_falcon(self):
+        """Test batch command preview returns a payload shape without executing."""
+        result = self.module.preview_rtr_admin_batch_command(
+            batch_id="batch-1",
+            base_command="runscript",
+            command_string="runscript -CloudFile=\"FixThing\"",
+            optional_hosts=["aid-1", "aid-2"],
+            target_summary="two reviewed accounting workstations",
+            reason="repair approved application state",
+            ticket="INC-123",
+            expected_effect="run the approved repair script",
+            persist_all=False,
+            timeout=30,
+            timeout_duration="30s",
+            host_timeout_duration="20s",
+        )
+
+        self.assertTrue(result["execution_available"])
+        self.assertEqual(result["execution_tool"], "falcon_execute_rtr_admin_batch_command")
+        self.assertEqual(result["operation"], "BatchAdminCmd")
+        self.assertEqual(result["target"]["batch_id"], "batch-1")
+        self.assertEqual(result["target"]["target_summary"], "two reviewed accounting workstations")
+        self.assertEqual(result["payload_preview"]["body"]["optional_hosts"], ["aid-1", "aid-2"])
+        self.assertEqual(result["payload_preview"]["query"]["timeout"], 30)
+        self.assertTrue(result["approval_gate"]["approval_required"])
+        self.assertTrue(result["approval_gate"]["approval_ready"])
+        self.mock_client.command.assert_not_called()
+
+    def test_preview_admin_batch_command_requires_target_summary_for_approval(self):
+        """Test high-impact batch approval requires reviewed group context."""
+        result = self.module.preview_rtr_admin_batch_command(
+            batch_id="batch-1",
+            base_command="rm",
+            command_string=r"rm C:\Temp\old.bin",
+            reason="cleanup test file",
+            ticket="INC-123",
+            expected_effect="remove selected file",
+        )
+
+        self.assertTrue(result["approval_gate"]["approval_required"])
+        self.assertFalse(result["approval_gate"]["approval_ready"])
+        self.assertEqual(
+            result["approval_gate"]["missing_approval_context"],
+            ["target_summary"],
+        )
+        self.assertNotIn("approval_phrase", result["approval_gate"])
+        self.mock_client.command.assert_not_called()
 
     def test_execute_admin_command_requires_target_and_command(self):
         """Test single-host RTR Admin execution validates minimum fields locally."""
@@ -1067,6 +1273,60 @@ class TestRTRAdminModule(TestModules):
         self.assertEqual(result["details"]["base_command"], "ps")
         self.assertEqual(result["details"]["command_string_base"], "rm")
         self.mock_client.command.assert_not_called()
+
+    def test_execute_admin_command_requires_approval_for_direct_separator_shape(self):
+        """Test direct command strings with control separators enter approval flow."""
+        result = self.module.execute_rtr_admin_command(
+            session_id="session-1",
+            device_id="aid-1",
+            base_command="ps",
+            command_string=r"ps && rm C:\Temp\old.bin",
+            reason="inspect and clean selected process artifact",
+            ticket="INC-123",
+            expected_effect="list processes and remove the selected old file",
+        )
+
+        self.assertIn("error", result)
+        self.assertEqual(result["details"]["classification"]["category"], "high_impact")
+        self.assertFalse(result["details"]["classification"]["allowed_for_execution"])
+        self.assertTrue(result["details"]["classification"]["requires_approval"])
+        self.assertTrue(result["details"]["approval_gate"]["approval_required"])
+        self.assertTrue(result["details"]["approval_gate"]["review_warnings"])
+        self.mock_client.command.assert_not_called()
+
+    def test_execute_admin_command_allows_direct_separator_shape_after_approval(self):
+        """Test reviewed direct separator command can execute with exact approval."""
+        preview = self.module.preview_rtr_admin_command(
+            session_id="session-1",
+            device_id="aid-1",
+            base_command="ps",
+            command_string=r"ps && rm C:\Temp\old.bin",
+            reason="inspect and clean selected process artifact",
+            ticket="INC-123",
+            expected_effect="list processes and remove the selected old file",
+        )
+        approval_phrase = preview["approval_gate"]["approval_phrase"]
+        self.assertTrue(preview["approval_gate"]["review_warnings"])
+        self.mock_client.command.return_value = {
+            "status_code": 200,
+            "body": {"resources": [{"cloud_request_id": "req-123"}]},
+        }
+
+        result = self.module.execute_rtr_admin_command(
+            session_id="session-1",
+            device_id="aid-1",
+            base_command="ps",
+            command_string=r"ps && rm C:\Temp\old.bin",
+            reason="inspect and clean selected process artifact",
+            ticket="INC-123",
+            expected_effect="list processes and remove the selected old file",
+            operator_approval=approval_phrase,
+        )
+
+        self.assertTrue(result["submitted"])
+        self.assertTrue(result["approval_gate"]["approved"])
+        self.assertTrue(result["approval_gate"]["review_warnings"])
+        self.mock_client.command.assert_called_once()
 
     def test_execute_admin_command_wraps_api_error(self):
         """Test single-host RTR Admin execution includes context on API errors."""

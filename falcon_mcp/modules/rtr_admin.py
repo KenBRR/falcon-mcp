@@ -8,6 +8,7 @@ updates, or deletes.
 
 import hashlib
 import json
+import shlex
 import time
 from typing import Any
 
@@ -74,6 +75,7 @@ BLOCKED_ADMIN_COMMANDS = {
     "zip",
 }
 READ_ONLY_UPDATE_SUBCOMMANDS = {"history", "list", "query"}
+DIRECT_COMMAND_REVIEW_MARKERS = ("&&", "||", ";", "|", "\n", "\r")
 
 RTR_ADMIN_SAFETY_DISCLAIMER = (
     "RTR Admin can affect live endpoints. This module can execute admin "
@@ -141,8 +143,24 @@ class RTRAdminModule(BaseModule):
         )
         self._add_tool(
             server=server,
+            method=self.preview_rtr_admin_batch_command,
+            name="preview_rtr_admin_batch_command",
+        )
+        self._add_tool(
+            server=server,
             method=self.execute_rtr_admin_command,
             name="execute_rtr_admin_command",
+            annotations=ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
+        )
+        self._add_tool(
+            server=server,
+            method=self.execute_rtr_admin_batch_command,
+            name="execute_rtr_admin_batch_command",
             annotations=ToolAnnotations(
                 readOnlyHint=False,
                 destructiveHint=True,
@@ -285,6 +303,7 @@ class RTRAdminModule(BaseModule):
                 "4. For high-impact commands, build an approval packet and wait for explicit operator approval.",
                 "5. Use `falcon_run_rtr_admin_command_and_wait` for focused single-host commands when direct output is needed.",
                 "6. Use `falcon_execute_rtr_admin_command` plus `falcon_check_rtr_admin_command_status` when manual polling is better.",
+                "7. For reviewed host groups, use `falcon_init_rtr_batch_session`, `falcon_preview_rtr_admin_batch_command`, then `falcon_execute_rtr_admin_batch_command`.",
                 "",
                 "Do not invent new tools, bypass the approval phrase, or place RTR controller actions inside raw scripts.",
             ]
@@ -331,6 +350,7 @@ class RTRAdminModule(BaseModule):
                 "3. Use `falcon_preview_rtr_admin_command` with reason, ticket, and expected_effect.",
                 "4. Copy the preview `approval_gate.approval_phrase` only after operator approval.",
                 "5. Execute once with `falcon_run_rtr_admin_command_and_wait`, or use `falcon_execute_rtr_admin_command` then poll status.",
+                "6. For batch execution, use the batch preview/execution tools and include a reviewed `target_summary`.",
                 "",
                 "Approval template resource: falcon://rtr-admin/approval/packet-guide",
             ]
@@ -741,10 +761,34 @@ class RTRAdminModule(BaseModule):
             )
 
         normalized = base_command.strip().lower()
+        if len(normalized.split()) != 1:
+            return _format_error_response(
+                "base_command must be a single RTR Admin command token. "
+                "No Falcon call was made.",
+                details={"base_command": normalized},
+            )
+
         command_text = command_string.strip() if isinstance(command_string, str) else ""
-        command_lower = command_text.lower()
-        command_base = command_lower.split(maxsplit=1)[0] if command_lower else None
-        command_warnings = self._command_shape_warnings(normalized, command_text)
+        try:
+            command_tokens = self._command_tokens(command_text)
+        except ValueError as exc:
+            return _format_error_response(
+                "command_string could not be parsed safely. No Falcon call was made.",
+                details={"parse_error": str(exc)},
+            )
+
+        command_base = self._command_base_from_tokens(command_tokens)
+        command_warnings = self._command_shape_warnings(
+            normalized,
+            command_text,
+            command_tokens,
+        )
+        direct_command_review_warning = self._direct_command_review_warning(
+            normalized,
+            command_text,
+        )
+        if direct_command_review_warning:
+            command_warnings.append(direct_command_review_warning)
 
         if command_base and command_base != normalized:
             return _format_error_response(
@@ -754,6 +798,19 @@ class RTRAdminModule(BaseModule):
                     "base_command": normalized,
                     "command_string_base": command_base,
                 },
+            )
+
+        if direct_command_review_warning and self._is_known_admin_command(normalized):
+            return self._classification(
+                normalized,
+                "high_impact",
+                "critical",
+                False,
+                "Direct RTR Admin command_string contains shell/control separators. "
+                "It requires explicit approval packet review before execution.",
+                requires_approval=True,
+                can_execute_with_approval=True,
+                command_warnings=command_warnings,
             )
 
         if normalized in READ_ONLY_ADMIN_COMMANDS:
@@ -767,7 +824,7 @@ class RTRAdminModule(BaseModule):
             )
 
         if normalized == "reg":
-            if command_lower.split()[:2] == ["reg", "query"]:
+            if command_tokens[:2] == ["reg", "query"]:
                 return self._classification(
                     normalized,
                     "read_only",
@@ -788,8 +845,10 @@ class RTRAdminModule(BaseModule):
             )
 
         if normalized == "update":
-            update_tokens = command_lower.split()
-            if len(update_tokens) >= 2 and update_tokens[1] in READ_ONLY_UPDATE_SUBCOMMANDS:
+            if (
+                len(command_tokens) >= 2
+                and command_tokens[1] in READ_ONLY_UPDATE_SUBCOMMANDS
+            ):
                 return self._classification(
                     normalized,
                     "read_only",
@@ -990,6 +1049,143 @@ class RTRAdminModule(BaseModule):
             "approval_gate": approval_gate,
         }
 
+    def preview_rtr_admin_batch_command(
+        self,
+        batch_id: str = Field(description="RTR batch ID returned by falcon_init_rtr_batch_session."),
+        base_command: str = Field(description="RTR Admin base command to preview for the batch."),
+        command_string: str = Field(description="Full RTR Admin command string to preview."),
+        optional_hosts: list[str] | None = Field(
+            default=None,
+            description="Optional subset of host AIDs within the batch to impact.",
+        ),
+        target_summary: str | None = Field(
+            default=None,
+            description="Human-readable summary of the reviewed host group or subset.",
+        ),
+        reason: str | None = Field(
+            default=None,
+            description="Why this batch command is being considered.",
+        ),
+        ticket: str | None = Field(
+            default=None,
+            description="Ticket, case, or incident identifier for audit context.",
+        ),
+        expected_effect: str | None = Field(
+            default=None,
+            description="Expected endpoint effect across the reviewed host group.",
+        ),
+        persist_all: bool = Field(
+            default=False,
+            description="Whether the command should run when offline hosts return to service.",
+        ),
+        timeout: int | None = Field(
+            default=None,
+            ge=1,
+            le=300,
+            description="How long to wait for the overall batch request in seconds. Max: 300.",
+        ),
+        timeout_duration: str | None = Field(
+            default=None,
+            description="Alternate overall timeout duration such as `30s` or `4m`. Max: 5m.",
+        ),
+        host_timeout_duration: str | None = Field(
+            default=None,
+            description="Per-host processing timeout duration such as `30s` or `4m`. Must be less than the overall timeout.",
+        ),
+    ) -> dict[str, Any]:
+        """Preview an RTR Admin batch command payload without executing it.
+
+        Use this after initializing and reviewing an RTR batch session. The
+        preview returns the exact BatchAdminCmd body/query shape, local command
+        classification, and approval gate. It never calls Falcon.
+        """
+        batch_id = unwrap_field_default(batch_id)
+        base_command = unwrap_field_default(base_command)
+        command_string = unwrap_field_default(command_string)
+        optional_hosts = unwrap_field_default(optional_hosts)
+        target_summary = unwrap_field_default(target_summary)
+        reason = unwrap_field_default(reason)
+        ticket = unwrap_field_default(ticket)
+        expected_effect = unwrap_field_default(expected_effect)
+        persist_all = unwrap_field_default(persist_all)
+        timeout = unwrap_field_default(timeout)
+        timeout_duration = unwrap_field_default(timeout_duration)
+        host_timeout_duration = unwrap_field_default(host_timeout_duration)
+
+        missing_required = []
+        if not isinstance(batch_id, str) or not batch_id.strip():
+            missing_required.append("batch_id")
+        if not isinstance(base_command, str) or not base_command.strip():
+            missing_required.append("base_command")
+        if not isinstance(command_string, str) or not command_string.strip():
+            missing_required.append("command_string")
+
+        if missing_required:
+            return _format_error_response(
+                "RTR Admin batch preview requires non-empty batch_id, "
+                "base_command, and command_string. No Falcon call was made.",
+                details={"missing_required": missing_required},
+            )
+
+        classification = self.classify_rtr_admin_command(base_command, command_string)
+        if self._is_error(classification):
+            return classification
+
+        audit_context = self._audit_context(reason, ticket, expected_effect)
+        missing_context = self._missing_audit_context(reason, ticket, expected_effect)
+        body = self._execute_admin_batch_command_body(
+            batch_id=batch_id,
+            base_command=base_command,
+            command_string=command_string,
+            optional_hosts=optional_hosts,
+            persist_all=bool(persist_all),
+        )
+        query = prepare_api_parameters(
+            {
+                "timeout": timeout,
+                "timeout_duration": timeout_duration,
+                "host_timeout_duration": host_timeout_duration,
+            }
+        )
+        payload = {"body": prepare_api_parameters(body), "query": query}
+        target = {
+            "batch_id": batch_id,
+            "optional_hosts": optional_hosts,
+            "target_summary": target_summary,
+        }
+        approval_gate = self._approval_gate(
+            operation="BatchAdminCmd",
+            classification=classification,
+            payload=payload,
+            target=target,
+            audit_context=audit_context,
+        )
+
+        return {
+            "execution_available": True,
+            "execution_tool": "falcon_execute_rtr_admin_batch_command",
+            "policy_allows_future_execution": classification["allowed_for_execution"],
+            "policy_note": (
+                "Classification is enforced before Falcon calls. High-impact "
+                "batch commands require the exact operator approval phrase "
+                "returned by this preview or by a blocked execution attempt."
+            ),
+            "classification_enforced": True,
+            "classification": classification,
+            "safety_disclaimer": RTR_ADMIN_SAFETY_DISCLAIMER,
+            "command_guidance": self._command_guidance(base_command, command_string),
+            "missing_context": missing_context,
+            "required_context": list(audit_context.keys()),
+            "target": target,
+            "operation": "BatchAdminCmd",
+            "payload_preview": payload,
+            "review_note": (
+                "This preview does not call Falcon. Use the batch execution tool "
+                "only after reviewing the batch target and expected endpoint effect."
+            ),
+            "approval_gate": approval_gate,
+        }
+
     def execute_rtr_admin_command(
         self,
         base_command: str = Field(description="RTR Admin base command to execute."),
@@ -1114,6 +1310,153 @@ class RTRAdminModule(BaseModule):
 
         return self._execution_response(
             operation="RTR_ExecuteAdminCommand",
+            result=result,
+            classification=classification,
+            approval_gate=approval_gate,
+            target=target,
+            missing_context=missing_context,
+            payload=payload,
+        )
+
+    def execute_rtr_admin_batch_command(
+        self,
+        batch_id: str = Field(description="RTR batch ID returned by falcon_init_rtr_batch_session."),
+        base_command: str = Field(description="RTR Admin base command to execute for the batch."),
+        command_string: str = Field(description="Full RTR Admin command string to execute."),
+        optional_hosts: list[str] | None = Field(
+            default=None,
+            description="Optional subset of host AIDs within the batch to impact.",
+        ),
+        target_summary: str | None = Field(
+            default=None,
+            description="Human-readable summary of the reviewed host group or subset.",
+        ),
+        reason: str | None = Field(
+            default=None,
+            description="Why this batch command is being executed.",
+        ),
+        ticket: str | None = Field(
+            default=None,
+            description="Ticket, case, or incident identifier for audit context.",
+        ),
+        expected_effect: str | None = Field(
+            default=None,
+            description="Expected endpoint effect across the reviewed host group.",
+        ),
+        operator_approval: str | None = Field(
+            default=None,
+            description=(
+                "Exact approval phrase required for high-impact RTR Admin batch "
+                "commands. Get it from preview or from the approval-required "
+                "response after human review."
+            ),
+        ),
+        persist_all: bool = Field(
+            default=False,
+            description="Execute when offline hosts in the batch return to service.",
+        ),
+        timeout: int | None = Field(
+            default=None,
+            ge=1,
+            le=300,
+            description="How long to wait for the overall batch request in seconds. Max: 300.",
+        ),
+        timeout_duration: str | None = Field(
+            default=None,
+            description="Alternate overall timeout duration such as `30s` or `4m`. Max: 5m.",
+        ),
+        host_timeout_duration: str | None = Field(
+            default=None,
+            description="Per-host processing timeout duration such as `30s` or `4m`. Must be less than the overall timeout.",
+        ),
+    ) -> dict[str, Any]:
+        """Execute an RTR Admin command across an existing RTR batch.
+
+        Use after previewing the batch payload and confirming the reviewed host
+        group. High-impact commands are blocked unless the exact operator
+        approval phrase is supplied.
+        """
+        batch_id = unwrap_field_default(batch_id)
+        base_command = unwrap_field_default(base_command)
+        command_string = unwrap_field_default(command_string)
+        optional_hosts = unwrap_field_default(optional_hosts)
+        target_summary = unwrap_field_default(target_summary)
+        reason = unwrap_field_default(reason)
+        ticket = unwrap_field_default(ticket)
+        expected_effect = unwrap_field_default(expected_effect)
+        operator_approval = unwrap_field_default(operator_approval)
+        persist_all = unwrap_field_default(persist_all)
+        timeout = unwrap_field_default(timeout)
+        timeout_duration = unwrap_field_default(timeout_duration)
+        host_timeout_duration = unwrap_field_default(host_timeout_duration)
+
+        missing_required = []
+        if not isinstance(batch_id, str) or not batch_id.strip():
+            missing_required.append("batch_id")
+        if not isinstance(base_command, str) or not base_command.strip():
+            missing_required.append("base_command")
+        if not isinstance(command_string, str) or not command_string.strip():
+            missing_required.append("command_string")
+
+        if missing_required:
+            return _format_error_response(
+                "RTR Admin batch execution requires batch_id, base_command, "
+                "and command_string. No Falcon call was made.",
+                details={"missing_required": missing_required},
+            )
+
+        classification = self.classify_rtr_admin_command(base_command, command_string)
+        if self._is_error(classification):
+            return classification
+
+        body = self._execute_admin_batch_command_body(
+            batch_id=batch_id,
+            base_command=base_command,
+            command_string=command_string,
+            optional_hosts=optional_hosts,
+            persist_all=bool(persist_all),
+        )
+        query = prepare_api_parameters(
+            {
+                "timeout": timeout,
+                "timeout_duration": timeout_duration,
+                "host_timeout_duration": host_timeout_duration,
+            }
+        )
+        payload = {"body": prepare_api_parameters(body), "query": query}
+        target = {
+            "batch_id": batch_id,
+            "optional_hosts": optional_hosts,
+            "target_summary": target_summary,
+        }
+        audit_context = self._audit_context(reason, ticket, expected_effect)
+        missing_context = self._missing_audit_context(reason, ticket, expected_effect)
+        approval_gate = self._approval_gate(
+            operation="BatchAdminCmd",
+            classification=classification,
+            payload=payload,
+            target=target,
+            audit_context=audit_context,
+        )
+        policy_error = self._enforce_admin_command_policy(
+            classification=classification,
+            approval_gate=approval_gate,
+            operator_approval=operator_approval,
+            target=target,
+            payload=payload,
+        )
+        if policy_error:
+            return policy_error
+
+        result = self._base_query_api_call(
+            operation="BatchAdminCmd",
+            query_params=query,
+            body_params=body,
+            error_message="Failed to execute RTR Admin batch command",
+        )
+
+        return self._execution_response(
+            operation="BatchAdminCmd",
             result=result,
             classification=classification,
             approval_gate=approval_gate,
@@ -1314,6 +1657,7 @@ class RTRAdminModule(BaseModule):
                 "`reg query` accepts only a small argument shape in Falcon RTR; keep key/value arguments minimal and preview warnings before live use.",
                 "Use `rm <directory> -force` for directory cleanup and verify stderr/stdout before assuming deletion succeeded.",
                 "`runscript` is always high impact and requires approval.",
+                "Direct RTR Admin command strings with shell/control separators are called out in approval packets and require high-impact review before execution.",
                 "Unknown commands are blocked until reviewed and explicitly allowlisted.",
                 "For execution, `base_command` must match the first token of `command_string`.",
             ]
@@ -1362,6 +1706,22 @@ class RTRAdminModule(BaseModule):
             "persist": persist,
         }
 
+    def _execute_admin_batch_command_body(
+        self,
+        batch_id: str,
+        base_command: str,
+        command_string: str,
+        optional_hosts: list[str] | None,
+        persist_all: bool,
+    ) -> dict[str, Any]:
+        return {
+            "base_command": base_command,
+            "batch_id": batch_id,
+            "command_string": command_string,
+            "optional_hosts": optional_hosts,
+            "persist_all": persist_all,
+        }
+
     def _execution_response(
         self,
         operation: str,
@@ -1387,13 +1747,10 @@ class RTRAdminModule(BaseModule):
             "missing_context": missing_context,
             "target": target,
             "payload": payload,
-            "next_step": (
-                "Use `falcon_check_rtr_admin_command_status` with the returned "
-                "cloud_request_id to retrieve command output."
-            ),
+            "next_step": self._execution_next_step(operation),
         }
 
-        if payload.get("body", {}).get("persist"):
+        if payload.get("body", {}).get("persist") or payload.get("body", {}).get("persist_all"):
             response["persist_warning"] = (
                 "Persisted RTR Admin commands may run when offline hosts return "
                 "to service."
@@ -1406,6 +1763,18 @@ class RTRAdminModule(BaseModule):
             )
 
         return response
+
+    def _execution_next_step(self, operation: str) -> str:
+        if operation == "BatchAdminCmd":
+            return (
+                "Review the returned batch command records. Use "
+                "`falcon_check_rtr_admin_command_status` with any returned "
+                "per-host cloud_request_id values to retrieve host output."
+            )
+        return (
+            "Use `falcon_check_rtr_admin_command_status` with the returned "
+            "cloud_request_id to retrieve command output."
+        )
 
     def _format_admin_wait_result(
         self,
@@ -1520,6 +1889,7 @@ class RTRAdminModule(BaseModule):
                 "approval_ready": False,
                 "missing_approval_context": missing_approval_context,
                 "reason": classification.get("blocked_reason") or classification.get("explanation"),
+                "review_warnings": classification.get("command_warnings") or [],
                 "instruction": (
                     "Provide device_id, reason, ticket, and expected_effect before "
                     "requesting high-impact approval. No approval phrase is issued "
@@ -1541,6 +1911,7 @@ class RTRAdminModule(BaseModule):
             "approval_phrase": f"APPROVE_RTR_ADMIN_{approval_hash}",
             "approval_hash": approval_hash,
             "reason": classification.get("blocked_reason") or classification.get("explanation"),
+            "review_warnings": classification.get("command_warnings") or [],
             "instruction": (
                 "Ask the operator to review the exact target, command, expected effect, "
                 "and payload hash. Re-submit with operator_approval set to the exact "
@@ -1557,7 +1928,9 @@ class RTRAdminModule(BaseModule):
         audit_context: dict[str, Any],
     ) -> str:
         hash_target = {
-            k: v for k, v in target.items() if k in ("session_id", "device_id")
+            k: v
+            for k, v in target.items()
+            if k in ("device_id", "batch_id", "optional_hosts", "target_summary")
         }
         material = {
             "operation": operation,
@@ -1566,10 +1939,18 @@ class RTRAdminModule(BaseModule):
             "risk": classification.get("risk"),
             "target": prepare_api_parameters(hash_target),
             "audit_context": prepare_api_parameters(audit_context),
-            "payload": payload,
+            "payload": self._approval_payload_material(payload),
         }
         serialized = json.dumps(material, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16].upper()
+
+    def _approval_payload_material(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Return approval-bound payload fields, excluding volatile session IDs."""
+        material = dict(payload)
+        body = material.get("body")
+        if isinstance(body, dict):
+            material["body"] = {k: v for k, v in body.items() if k != "session_id"}
+        return material
 
     def _audit_context(
         self,
@@ -1611,7 +1992,10 @@ class RTRAdminModule(BaseModule):
         missing = [
             key for key, value in audit_context.items() if not self._has_text(value)
         ]
-        if not self._has_text(target.get("device_id")):
+        if self._has_text(target.get("batch_id")):
+            if not self._has_text(target.get("target_summary")):
+                missing.append("target_summary")
+        elif not self._has_text(target.get("device_id")):
             missing.append("device_id")
         return missing
 
@@ -1649,18 +2033,63 @@ class RTRAdminModule(BaseModule):
         self,
         base_command: str,
         command_string: str,
+        command_tokens: list[str] | None = None,
     ) -> list[str]:
         if base_command != "reg":
             return []
 
-        tokens = command_string.split()
-        if len(tokens) > 3 and [token.lower() for token in tokens[:2]] == ["reg", "query"]:
+        tokens = command_tokens
+        if tokens is None:
+            try:
+                tokens = self._command_tokens(command_string)
+            except ValueError:
+                return ["Command string could not be parsed safely."]
+
+        if len(tokens) > 3 and tokens[:2] == ["reg", "query"]:
             return [
                 "`reg query` can return Falcon HTTP 400 when more than two "
                 "arguments follow `reg`. Keep the query shape to "
                 "`reg query <key>` or quote paths with spaces before live use."
             ]
         return []
+
+    def _command_tokens(self, command_string: str) -> list[str]:
+        if not command_string:
+            return []
+        return [token.strip().lower() for token in shlex.split(command_string, posix=False)]
+
+    def _command_base_from_tokens(self, command_tokens: list[str]) -> str | None:
+        if not command_tokens:
+            return None
+        return command_tokens[0]
+
+    def _is_known_admin_command(self, base_command: str) -> bool:
+        return (
+            base_command in READ_ONLY_ADMIN_COMMANDS
+            or base_command in EVIDENCE_COLLECTION_COMMANDS
+            or base_command in SENSITIVE_COLLECTION_COMMANDS
+            or base_command in BLOCKED_ADMIN_COMMANDS
+            or base_command in {"reg", "runscript", "update"}
+        )
+
+    def _direct_command_review_warning(
+        self,
+        base_command: str,
+        command_string: str,
+    ) -> str | None:
+        if not command_string or base_command == "runscript":
+            return None
+
+        for marker in DIRECT_COMMAND_REVIEW_MARKERS:
+            if marker in command_string:
+                return (
+                    "Direct RTR Admin command_string contains shell/control "
+                    f"separator `{marker}`. Call this out in the approval packet; "
+                    "confirm whether the operator intended one RTR command or "
+                    "target-side shell logic."
+                )
+
+        return None
 
     def _command_guidance(
         self,

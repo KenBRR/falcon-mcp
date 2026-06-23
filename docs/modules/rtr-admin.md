@@ -38,6 +38,23 @@ Returns category, risk level, approval requirements, and explanation.
 
 - "Classify this RTR Admin command before I decide whether to run it"
 
+### `falcon_execute_rtr_admin_batch_command`
+
+> [!CAUTION]
+> This tool performs destructive operations.
+
+**Required scopes:** `Real time response (admin):write`
+
+Execute an RTR Admin command across an existing RTR batch.
+
+Use after previewing the batch payload and confirming the reviewed host
+group. High-impact commands are blocked unless the exact operator
+approval phrase is supplied.
+
+**Example prompts:**
+
+- "Run this approved RTR Admin command against the reviewed RTR batch"
+
 ### `falcon_execute_rtr_admin_command`
 
 > [!CAUTION]
@@ -74,6 +91,20 @@ inventory can still retrieve text content.
 **Example prompts:**
 
 - "Retrieve the contents for RTR put-file ID abc123"
+
+### `falcon_preview_rtr_admin_batch_command`
+
+**Required scopes:** `Real time response (admin):write`
+
+Preview an RTR Admin batch command payload without executing it.
+
+Use this after initializing and reviewing an RTR batch session. The
+preview returns the exact BatchAdminCmd body/query shape, local command
+classification, and approval gate. It never calls Falcon.
+
+**Example prompts:**
+
+- "Preview this RTR Admin command for the reviewed batch before approval"
 
 ### `falcon_preview_rtr_admin_command`
 

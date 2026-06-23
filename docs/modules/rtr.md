@@ -90,6 +90,23 @@ session records.
 
 - "Get details for RTR session abc123"
 
+### `falcon_init_rtr_batch_session`
+
+> [!NOTE]
+> This tool modifies data.
+
+**Required scopes:** `Real time response:read`
+
+Initialize an RTR batch session for multiple hosts.
+
+Use this when the same follow-up command should target a reviewed group
+of devices. Returns Falcon batch session details including the batch_id
+needed by batch RTR command tools.
+
+**Example prompts:**
+
+- "Start an RTR batch session for these reviewed host IDs"
+
 ### `falcon_init_rtr_session`
 
 > [!NOTE]
@@ -135,6 +152,22 @@ to prevent session expiration during long investigations.
 **Example prompts:**
 
 - "Refresh the RTR session to keep it alive"
+
+### `falcon_refresh_rtr_batch_session`
+
+> [!NOTE]
+> This tool modifies data.
+
+**Required scopes:** `Real time response:read`
+
+Refresh an RTR batch session timeout for multiple hosts.
+
+Keeps the mapped host sessions alive while an operator reviews an
+approval packet or prepares a group command.
+
+**Example prompts:**
+
+- "Refresh the RTR batch session while I wait for approval"
 
 ### `falcon_run_rtr_read_only_command_and_wait`
 

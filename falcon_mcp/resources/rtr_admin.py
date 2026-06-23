@@ -164,9 +164,17 @@ needed.
 
 3. Preview the exact payload.
    - Use `falcon_preview_rtr_admin_command` before live execution.
+   - For group work, initialize and review a batch with
+     `falcon_init_rtr_batch_session`, then use
+     `falcon_preview_rtr_admin_batch_command` with a human-readable
+     `target_summary`.
    - Provide `reason`, `ticket`, and `expected_effect` whenever possible.
    - Confirm `base_command` matches the first token of `command_string`;
      mismatches are rejected locally before any Falcon call.
+   - Keep direct RTR Admin command strings to one RTR command when possible.
+     Shell/control separators such as `&&`, `||`, `;`, and `|` are called out
+     in approval packet review and require high-impact approval outside
+     `runscript` payloads.
    - Review `payload_preview`, `classification`, `missing_context`,
      `approval_gate`, and any command-specific guidance.
    - For `reg query`, keep the query shape minimal. Falcon can reject extra
@@ -177,9 +185,17 @@ needed.
    - High-impact approval is only ready when `device_id`, `reason`, `ticket`,
      and `expected_effect` are present. The approval phrase binds the target,
      payload, and audit context.
+   - For batch commands, high-impact approval is only ready when `batch_id`,
+     `target_summary`, `reason`, `ticket`, and `expected_effect` are present.
+   - Single-host approval phrases intentionally bind to the stable `device_id`
+     and command intent, not the volatile RTR `session_id`, so an approved
+     packet can survive a session refresh or re-init for the same host.
 
 4. Execute only after target and effect review.
    - Use `falcon_execute_rtr_admin_command` for one host/session.
+   - Use `falcon_execute_rtr_admin_batch_command` for a reviewed RTR batch.
+     Pass `optional_hosts` when only a subset of hosts in the batch should be
+     impacted.
    - Use `falcon_run_rtr_admin_command_and_wait` when you want a focused
      single-host command to submit once and return combined stdout/stderr after
      polling. It uses the same classification and approval gate as the execution
@@ -201,6 +217,14 @@ needed.
      status chunk.
    - Start with `sequence_id=0`; if the status response includes a
      `sequence_id`, use that returned sequence_id on the next poll.
+   - For batch admin command responses, review returned per-host command
+     records and poll any returned `cloud_request_id` values individually.
+
+6. Keep sessions alive while approval is pending.
+   - Use `falcon_pulse_rtr_session` for a single host/session.
+   - Use `falcon_refresh_rtr_batch_session` for a batch. RTR batch sessions
+     expire quickly, so refresh them before executing after a long approval
+     pause or reinitialize the batch and re-preview if the host set changed.
 
 === Raw runscript workflow ===
 
@@ -221,7 +245,8 @@ needed.
   PC for that run.
 - Keep single-host `persist` false unless the operator explicitly wants offline
   execution when a host returns to service.
-- Batch admin execution is intentionally out of scope for this module slice.
+- Keep batch `persist_all` false unless the operator explicitly wants offline
+  execution when hosts return to service.
 - If audit/session searches return 403 during an RTR Admin investigation,
   verify the API client has `real-time-response-audit:read`.
 - Do not place RTR controller actions such as status polling, `get`, `put`, or
@@ -251,6 +276,9 @@ CLOUD SCRIPT SHAPE:
 IMPORTANT CONTROLLER NOTES:
 - `runscript -Raw` is not an interactive terminal. Each tool call submits one
   RTR Admin command and returns a `cloud_request_id`.
+- Shell/control separators are safest inside an approved target-side
+  `runscript` payload. If they appear in direct RTR Admin command strings such
+  as `ps` or `reg query`, the approval packet must call them out explicitly.
 - Use `falcon_check_rtr_admin_command_status` to poll command output chunks, or
   use `falcon_run_rtr_admin_command_and_wait` for focused commands where direct
   stdout/stderr output is preferred.
@@ -287,6 +315,7 @@ hash before the execution tool is called with `operator_approval`.
 - Persist when offline: false
 - Classification:
 - Risk:
+- Review warnings:
 
 === Rationale ===
 - Reason:

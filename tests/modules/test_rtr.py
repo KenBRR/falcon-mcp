@@ -25,6 +25,8 @@ class TestRTRModule(TestModules):
             "falcon_get_rtr_session_details",
             "falcon_init_rtr_session",
             "falcon_pulse_rtr_session",
+            "falcon_init_rtr_batch_session",
+            "falcon_refresh_rtr_batch_session",
             "falcon_execute_rtr_read_only_command",
             "falcon_run_rtr_read_only_command_and_wait",
             "falcon_check_rtr_command_status",
@@ -52,6 +54,24 @@ class TestRTRModule(TestModules):
         )
         self.assert_tool_annotations(
             "falcon_pulse_rtr_session",
+            ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
+        )
+        self.assert_tool_annotations(
+            "falcon_init_rtr_batch_session",
+            ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
+        )
+        self.assert_tool_annotations(
+            "falcon_refresh_rtr_batch_session",
             ToolAnnotations(
                 readOnlyHint=False,
                 destructiveHint=False,
@@ -327,6 +347,95 @@ class TestRTRModule(TestModules):
             },
         )
         self.assertEqual(result[0]["session_id"], "session-1")
+
+    def test_init_batch_session(self):
+        """Test RTR batch session initialization."""
+        self.mock_client.command.return_value = {
+            "status_code": 200,
+            "body": {"resources": [{"batch_id": "batch-1"}]},
+        }
+
+        result = self.module.init_batch_session(
+            host_ids=["aid-1", "aid-2"],
+            existing_batch_id="batch-existing",
+            queue_offline=True,
+            timeout=30,
+            timeout_duration="30s",
+            host_timeout_duration="20s",
+        )
+
+        self.mock_client.command.assert_called_once_with(
+            "BatchInitSessions",
+            parameters={
+                "timeout": 30,
+                "timeout_duration": "30s",
+                "host_timeout_duration": "20s",
+            },
+            body={
+                "existing_batch_id": "batch-existing",
+                "host_ids": ["aid-1", "aid-2"],
+                "queue_offline": True,
+            },
+        )
+        self.assertEqual(result["batch_id"], "batch-1")
+        self.assertEqual(result["resources"][0]["batch_id"], "batch-1")
+
+    def test_init_batch_session_preserves_live_batch_id_shape(self):
+        """Test RTR batch init preserves top-level batch_id from live Falcon responses."""
+        self.mock_client.command.return_value = {
+            "status_code": 201,
+            "body": {
+                "batch_id": "batch-live",
+                "resources": {
+                    "aid-1": {
+                        "session_id": "session-1",
+                        "complete": True,
+                        "offline_queued": False,
+                    }
+                },
+                "errors": [],
+                "meta": {"trace_id": "trace-1"},
+            },
+        }
+
+        result = self.module.init_batch_session(
+            host_ids=["aid-1"],
+            existing_batch_id=None,
+            queue_offline=False,
+            timeout=30,
+            timeout_duration=None,
+            host_timeout_duration=None,
+        )
+
+        self.assertEqual(result["batch_id"], "batch-live")
+        self.assertIn("aid-1", result["resources"])
+        self.assertEqual(result["meta"]["trace_id"], "trace-1")
+
+    def test_refresh_batch_session(self):
+        """Test RTR batch session refresh."""
+        self.mock_client.command.return_value = {
+            "status_code": 200,
+            "body": {"resources": [{"batch_id": "batch-1", "refreshed": True}]},
+        }
+
+        result = self.module.refresh_batch_session(
+            batch_id="batch-1",
+            timeout=30,
+            timeout_duration="30s",
+            host_timeout_duration="20s",
+        )
+
+        self.mock_client.command.assert_called_once_with(
+            "BatchRefreshSessions",
+            parameters={
+                "timeout": 30,
+                "timeout_duration": "30s",
+                "host_timeout_duration": "20s",
+            },
+            body={"batch_id": "batch-1"},
+        )
+        self.assertEqual(result["batch_id"], "batch-1")
+        self.assertTrue(result["resources"][0]["refreshed"])
 
     def test_execute_read_only_command(self):
         """Test RTR read-only command execution."""

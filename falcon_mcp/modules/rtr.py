@@ -89,6 +89,30 @@ class RTRModule(BaseModule):
 
         self._add_tool(
             server=server,
+            method=self.init_batch_session,
+            name="init_rtr_batch_session",
+            annotations=ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
+        )
+
+        self._add_tool(
+            server=server,
+            method=self.refresh_batch_session,
+            name="refresh_rtr_batch_session",
+            annotations=ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
+        )
+
+        self._add_tool(
+            server=server,
             method=self.execute_read_only_command,
             name="execute_rtr_read_only_command",
             annotations=ToolAnnotations(
@@ -474,6 +498,134 @@ class RTRModule(BaseModule):
             },
             error_message="Failed to pulse RTR session",
         )
+
+    def init_batch_session(
+        self,
+        host_ids: list[str] = Field(
+            description="Host agent IDs (AIDs) to initialize into one RTR batch session.",
+        ),
+        existing_batch_id: str | None = Field(
+            default=None,
+            description="Optional existing RTR batch ID to add hosts to.",
+        ),
+        queue_offline: bool = Field(
+            default=False,
+            description="Queue the request if hosts are currently offline.",
+        ),
+        timeout: int | None = Field(
+            default=None,
+            ge=1,
+            le=300,
+            description="How long to wait for the overall batch request in seconds. Max: 300.",
+        ),
+        timeout_duration: str | None = Field(
+            default=None,
+            description="Alternate overall timeout duration such as `30s` or `4m`. Max: 5m.",
+        ),
+        host_timeout_duration: str | None = Field(
+            default=None,
+            description="Per-host processing timeout duration such as `30s` or `4m`. Must be less than the overall timeout.",
+        ),
+    ) -> dict[str, Any]:
+        """Initialize an RTR batch session for multiple hosts.
+
+        Use this when the same follow-up command should target a reviewed group
+        of devices. Returns Falcon batch session details including the batch_id
+        needed by batch RTR command tools.
+        """
+        if not host_ids:
+            return {"error": "host_ids is required to initialize an RTR batch session."}
+
+        return self._batch_session_api_call(
+            operation="BatchInitSessions",
+            query_params={
+                "timeout": timeout,
+                "timeout_duration": timeout_duration,
+                "host_timeout_duration": host_timeout_duration,
+            },
+            body_params={
+                "existing_batch_id": existing_batch_id,
+                "host_ids": host_ids,
+                "queue_offline": queue_offline,
+            },
+        )
+
+    def refresh_batch_session(
+        self,
+        batch_id: str = Field(
+            description="RTR batch ID returned from falcon_init_rtr_batch_session.",
+        ),
+        timeout: int | None = Field(
+            default=None,
+            ge=1,
+            le=300,
+            description="How long to wait for the batch refresh request in seconds. Max: 300.",
+        ),
+        timeout_duration: str | None = Field(
+            default=None,
+            description="Alternate overall timeout duration such as `30s` or `4m`. Max: 5m.",
+        ),
+        host_timeout_duration: str | None = Field(
+            default=None,
+            description="Per-host processing timeout duration such as `30s` or `4m`. Must be less than the overall timeout.",
+        ),
+    ) -> dict[str, Any]:
+        """Refresh an RTR batch session timeout for multiple hosts.
+
+        Keeps the mapped host sessions alive while an operator reviews an
+        approval packet or prepares a group command.
+        """
+        if not isinstance(batch_id, str) or not batch_id.strip():
+            return {"error": "batch_id is required to refresh an RTR batch session."}
+
+        return self._batch_session_api_call(
+            operation="BatchRefreshSessions",
+            query_params={
+                "timeout": timeout,
+                "timeout_duration": timeout_duration,
+                "host_timeout_duration": host_timeout_duration,
+            },
+            body_params={"batch_id": batch_id},
+        )
+
+    def _batch_session_api_call(
+        self,
+        operation: str,
+        query_params: dict[str, Any],
+        body_params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Call a batch session API and preserve top-level batch metadata."""
+        prepared_query = prepare_api_parameters(query_params)
+        prepared_body = prepare_api_parameters(body_params)
+        response = self.client.command(
+            operation,
+            parameters=prepared_query,
+            body=prepared_body,
+        )
+
+        if response.get("status_code") is None or response.get("status_code", 0) >= 300:
+            return handle_api_response(
+                response,
+                operation=operation,
+                error_message=f"Failed to call {operation}",
+                default_result={},
+            )
+
+        response_body = response.get("body", {})
+        resources = response_body.get("resources", [])
+        batch_id = response_body.get("batch_id")
+
+        if not batch_id and isinstance(resources, list) and resources:
+            first = resources[0]
+            if isinstance(first, dict):
+                batch_id = first.get("batch_id")
+
+        return {
+            "batch_id": batch_id,
+            "resources": resources,
+            "errors": response_body.get("errors", []),
+            "meta": response_body.get("meta", {}),
+        }
 
     def execute_read_only_command(
         self,

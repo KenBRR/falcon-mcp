@@ -453,6 +453,12 @@ TOOL_EXAMPLES: dict[str, list[str]] = {
     "falcon_pulse_rtr_session": [
         "Refresh the RTR session to keep it alive",
     ],
+    "falcon_init_rtr_batch_session": [
+        "Start an RTR batch session for these reviewed host IDs",
+    ],
+    "falcon_refresh_rtr_batch_session": [
+        "Refresh the RTR batch session while I wait for approval",
+    ],
     "falcon_execute_rtr_read_only_command": [
         "Run 'ps' on this host via RTR",
         "List running processes on host xyz",
@@ -496,8 +502,14 @@ TOOL_EXAMPLES: dict[str, list[str]] = {
     "falcon_preview_rtr_admin_command": [
         "Preview the exact RTR Admin payload for this command before running it",
     ],
+    "falcon_preview_rtr_admin_batch_command": [
+        "Preview this RTR Admin command for the reviewed batch before approval",
+    ],
     "falcon_execute_rtr_admin_command": [
         "Run this approved RTR Admin command against the existing RTR session",
+    ],
+    "falcon_execute_rtr_admin_batch_command": [
+        "Run this approved RTR Admin command against the reviewed RTR batch",
     ],
     "falcon_run_rtr_admin_command_and_wait": [
         "Run this approved RTR Admin command and wait for stdout and stderr",
